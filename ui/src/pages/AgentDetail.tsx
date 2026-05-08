@@ -41,7 +41,7 @@ import { RunButton, PauseResumeButton } from "../components/AgentActionButtons";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { PackageFileTree, buildFileTree } from "../components/PackageFileTree";
 import { ScrollToBottom } from "../components/ScrollToBottom";
-import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import { formatCents, formatDate, relativeTime, formatTokens, visibleRunCostUsd, runUsageBillingType } from "../lib/utils";
 import { cn } from "../lib/utils";
 import { describeRunRetryState } from "../lib/runRetryState";
 import { Button } from "@/components/ui/button";
@@ -269,6 +269,7 @@ function runMetrics(run: HeartbeatRun) {
   );
   const cost =
     visibleRunCostUsd(usage, result);
+  const billingType = runUsageBillingType(usage, result);
   const provider = asNonEmptyString(usage?.provider) ?? null;
   const model = asNonEmptyString(usage?.model) ?? null;
   return {
@@ -276,6 +277,7 @@ function runMetrics(run: HeartbeatRun) {
     output,
     cached,
     cost,
+    billingType,
     totalTokens: input + output,
     provider,
     model,
@@ -1351,6 +1353,7 @@ function CostsSection({
       return metrics.cost > 0 || metrics.input > 0 || metrics.output > 0 || metrics.cached > 0;
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const hasSubscriptionRuns = runs.some((r) => runMetrics(r).billingType === "subscription_included");
 
   return (
     <div className="space-y-4">
@@ -1372,6 +1375,14 @@ function CostsSection({
             <div>
               <span className="text-xs text-muted-foreground block">Total cost</span>
               <span className="text-lg font-semibold">{formatCents(runtimeState.totalCostCents)}</span>
+              {hasSubscriptionRuns && (
+                <span
+                  className="text-[10px] text-muted-foreground block leading-tight"
+                  title="Cost reflects API-rate equivalent reported by the upstream CLI. On subscription billing you pay your provider flat-rate, not per-token, so this is a usage-tracking value rather than what you're being billed."
+                >
+                  at API rates · subscription
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -1391,15 +1402,19 @@ function CostsSection({
             <tbody>
               {runsWithCost.slice(0, 10).map((run) => {
                 const metrics = runMetrics(run);
+                const isSubscription = metrics.billingType === "subscription_included";
                 return (
                   <tr key={run.id} className="border-b border-border last:border-b-0">
                     <td className="px-3 py-2">{formatDate(run.createdAt)}</td>
                     <td className="px-3 py-2 font-mono">{run.id.slice(0, 8)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.input)}</td>
                     <td className="px-3 py-2 text-right tabular-nums">{formatTokens(metrics.output)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">
+                    <td
+                      className="px-3 py-2 text-right tabular-nums"
+                      title={isSubscription ? "Subscription · API-rate equivalent" : undefined}
+                    >
                       {metrics.cost > 0
-                        ? `$${metrics.cost.toFixed(4)}`
+                        ? `$${metrics.cost.toFixed(4)}${isSubscription ? "*" : ""}`
                         : "-"
                       }
                     </td>
@@ -1408,6 +1423,11 @@ function CostsSection({
               })}
             </tbody>
           </table>
+          {hasSubscriptionRuns && (
+            <div className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground bg-accent/10">
+              <span className="font-mono">*</span> API-rate equivalent (subscription billing)
+            </div>
+          )}
         </div>
       )}
     </div>

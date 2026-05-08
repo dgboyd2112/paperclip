@@ -1038,8 +1038,13 @@ function resolveLedgerBiller(result: AdapterExecutionResult): string {
   return readNonEmptyString(result.biller) ?? readNonEmptyString(result.provider) ?? "unknown";
 }
 
-function normalizeBilledCostCents(costUsd: number | null | undefined, billingType: BillingType): number {
-  if (billingType === "subscription_included") return 0;
+function normalizeBilledCostCents(costUsd: number | null | undefined, _billingType: BillingType): number {
+  // Note: previously zeroed out cost when billingType === "subscription_included" because
+  // Paperclip is built as a billing intermediary and subscription users pay external providers
+  // flat-rate. We surface the API-equivalent cost the upstream CLI reports (e.g., Claude CLI's
+  // total_cost_usd) so users have personal-tracking visibility into what their tokens are worth.
+  // The billingType is still preserved on the cost_events row so downstream callers can
+  // distinguish billed-by-Paperclip cost from notional/API-equivalent cost if needed.
   if (typeof costUsd !== "number" || !Number.isFinite(costUsd)) return 0;
   return Math.max(0, Math.round(costUsd * 100));
 }

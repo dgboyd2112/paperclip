@@ -126,9 +126,20 @@ export function visibleRunCostUsd(
   usage: Record<string, unknown> | null,
   result: Record<string, unknown> | null = null,
 ): number {
-  const billingType = coerceBillingType(usage?.billingType) ?? coerceBillingType(result?.billingType);
-  if (billingType === "subscription_included") return 0;
+  // Note: previously returned 0 when billingType === "subscription_included" because Paperclip
+  // tracked only billed-by-Paperclip cost. We now surface the upstream-CLI-reported cost
+  // (e.g., Claude CLI's total_cost_usd) so users see API-equivalent value even on subscription
+  // billing. Callers that need to distinguish notional vs billed cost should inspect billingType
+  // directly via runUsageBillingType().
   return readRunCostUsd(usage) || readRunCostUsd(result);
+}
+
+/** Read the normalized billingType marker from a run's usage/result JSON, if present. */
+export function runUsageBillingType(
+  usage: Record<string, unknown> | null,
+  result: Record<string, unknown> | null = null,
+): BillingType | null {
+  return coerceBillingType(usage?.billingType) ?? coerceBillingType(result?.billingType);
 }
 
 export function financeEventKindDisplayName(eventKind: FinanceEventKind): string {
