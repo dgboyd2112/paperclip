@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
-interface CopyTextProps {
-  text: string;
+type CopyTextSource =
+  | { text: string; getText?: never }
+  | { text?: never; getText: () => string };
+
+type CopyTextProps = CopyTextSource & {
   /** What to display. Defaults to `text`. */
   children?: React.ReactNode;
   containerClassName?: string;
@@ -11,16 +14,19 @@ interface CopyTextProps {
   title?: string;
   /** Tooltip message shown after copying. Default: "Copied!" */
   copiedLabel?: string;
-}
+  disabled?: boolean;
+};
 
 export function CopyText({
   text,
+  getText,
   children,
   containerClassName,
   className,
   ariaLabel,
   title,
   copiedLabel = "Copied!",
+  disabled,
 }: CopyTextProps) {
   const [visible, setVisible] = useState(false);
   const [label, setLabel] = useState(copiedLabel);
@@ -30,13 +36,14 @@ export function CopyText({
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
   const handleClick = useCallback(async () => {
+    const value = getText ? getText() : (text ?? "");
     try {
       if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(value);
       } else {
         // Fallback for non-secure contexts (e.g. HTTP on non-localhost)
         const textarea = document.createElement("textarea");
-        textarea.value = text;
+        textarea.value = value;
         textarea.style.position = "fixed";
         textarea.style.left = "-9999px";
         document.body.appendChild(textarea);
@@ -55,7 +62,7 @@ export function CopyText({
     clearTimeout(timerRef.current);
     setVisible(true);
     timerRef.current = setTimeout(() => setVisible(false), 1500);
-  }, [copiedLabel, text]);
+  }, [copiedLabel, getText, text]);
 
   return (
     <span className={cn("relative inline-flex", containerClassName)}>
@@ -64,8 +71,9 @@ export function CopyText({
         type="button"
         aria-label={ariaLabel}
         title={title}
+        disabled={disabled}
         className={cn(
-          "cursor-copy hover:text-foreground transition-colors",
+          "cursor-copy hover:text-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:text-current",
           className,
         )}
         onClick={handleClick}

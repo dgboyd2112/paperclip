@@ -3920,6 +3920,18 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
               </button>
             ))}
           </div>
+          <CopyText
+            getText={() => {
+              const container = getScrollContainer();
+              return container instanceof HTMLElement ? container.innerText : "";
+            }}
+            ariaLabel="Copy transcript"
+            title="Copy transcript"
+            disabled={transcript.length === 0}
+            className="rounded-md border border-border/70 bg-background/70 p-1.5 text-muted-foreground hover:text-foreground"
+          >
+            <Copy className="h-3 w-3" />
+          </CopyText>
           {isLive && !isFollowing && (
             <Button
               variant="ghost"
