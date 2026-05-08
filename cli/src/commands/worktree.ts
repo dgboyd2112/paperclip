@@ -681,7 +681,12 @@ function copyDirectoryContents(sourceDir: string, targetDir: string): boolean {
 
     if (entry.isSymbolicLink()) {
       rmSync(targetPath, { recursive: true, force: true });
-      symlinkSync(readlinkSync(sourcePath), targetPath);
+      const linkTarget = readlinkSync(sourcePath);
+      if (process.platform === "win32") {
+        symlinkSync(linkTarget, targetPath, "junction");
+      } else {
+        symlinkSync(linkTarget, targetPath);
+      }
       copied = true;
       continue;
     }

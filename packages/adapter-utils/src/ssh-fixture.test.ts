@@ -182,7 +182,11 @@ describe("ssh env-lab fixture", () => {
     await mkdir(sourceDir, { recursive: true });
     await mkdir(localDir, { recursive: true });
     await writeFile(path.join(sourceDir, "auth.json"), "{\"token\":\"secret\"}\n", "utf8");
-    await symlink(path.join(sourceDir, "auth.json"), path.join(localDir, "auth.json"));
+    await symlink(
+      path.join(sourceDir, "auth.json"),
+      path.join(localDir, "auth.json"),
+      process.platform === "win32" ? "file" : undefined,
+    );
 
     const started = await startSshEnvLabFixture({ statePath });
     const config = await buildSshEnvLabFixtureConfig(started);

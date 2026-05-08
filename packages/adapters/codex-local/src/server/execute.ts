@@ -24,6 +24,7 @@ import {
   applyPaperclipWorkspaceEnv,
   buildPaperclipEnv,
   buildInvocationEnvForLogs,
+  createPlatformLink,
   ensureAbsoluteDirectory,
   ensurePaperclipSkillSymlink,
   ensurePathInEnv,
@@ -246,7 +247,10 @@ export async function ensureCodexSkillsInjected(
           if (linkSkill) {
             await linkSkill(entry.source, target);
           } else {
-            await fs.symlink(entry.source, target);
+            await createPlatformLink(entry.source, target, {
+              type: "dir",
+              copyFallback: true,
+            });
           }
           await onLog(
             "stdout",

@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import type { Agent } from "@paperclipai/shared";
 import {
+  createPlatformLink,
   removeMaintainerOnlySkillSymlinks,
   resolvePaperclipSkillsDir,
 } from "@paperclipai/adapter-utils/server-utils";
@@ -90,7 +91,7 @@ async function installSkillsForTarget(
         } catch (err) {
           await fs.unlink(target);
           try {
-            await fs.symlink(source, target);
+            await createPlatformLink(source, target, { type: "dir", copyFallback: true });
             summary.linked.push(entry.name);
             continue;
           } catch (linkErr) {
@@ -128,7 +129,7 @@ async function installSkillsForTarget(
     }
 
     try {
-      await fs.symlink(source, target);
+      await createPlatformLink(source, target, { type: "dir", copyFallback: true });
       summary.linked.push(entry.name);
     } catch (err) {
       summary.failed.push({

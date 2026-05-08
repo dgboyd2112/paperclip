@@ -3,6 +3,7 @@ import { constants as fsConstants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { createPlatformLink } from "./server-utils.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -210,7 +211,7 @@ export async function mirrorDirectory(
     await fs.rm(targetPath, { recursive: true, force: true }).catch(() => undefined);
     if (stats.isSymbolicLink()) {
       const linkTarget = await fs.readlink(sourcePath);
-      await fs.symlink(linkTarget, targetPath);
+      await createPlatformLink(linkTarget, targetPath, { type: "auto", copyFallback: false });
       return;
     }
 

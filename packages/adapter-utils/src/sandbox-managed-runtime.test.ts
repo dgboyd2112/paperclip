@@ -13,6 +13,23 @@ import {
 
 const execFile = promisify(execFileCallback);
 
+async function probeFileSymlinkSupport(): Promise<boolean> {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "paperclip-symlink-probe-"));
+  const sourcePath = path.join(dir, "src.txt");
+  const targetPath = path.join(dir, "tgt.txt");
+  try {
+    await writeFile(sourcePath, "x", "utf8");
+    await symlink(sourcePath, targetPath, process.platform === "win32" ? "file" : undefined);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+const fileSymlinksSupported = await probeFileSymlinkSupport();
+
 describe("sandbox managed runtime", () => {
   const cleanupDirs: string[] = [];
 
@@ -49,7 +66,7 @@ describe("sandbox managed runtime", () => {
     await expect(readFile(path.join(targetDir, "stale.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("syncs workspace and assets through a provider-neutral sandbox client", async () => {
+  it.runIf(fileSymlinksSupported)("syncs workspace and assets through a provider-neutral sandbox client", async () => {
     const rootDir = await mkdtemp(path.join(os.tmpdir(), "paperclip-sandbox-managed-"));
     cleanupDirs.push(rootDir);
     const localWorkspaceDir = path.join(rootDir, "local-workspace");
@@ -62,7 +79,14 @@ describe("sandbox managed runtime", () => {
     await writeFile(path.join(localWorkspaceDir, "._README.md"), "appledouble\n", "utf8");
     await writeFile(path.join(localWorkspaceDir, ".claude", "settings.json"), "{\"local\":true}\n", "utf8");
     await writeFile(linkedAssetPath, "skill body\n", "utf8");
-    await symlink(linkedAssetPath, path.join(localAssetsDir, "skill.md"));
+    // File symlinks on Windows require Developer Mode. Pass an explicit type so
+    // the failure mode is at least clear; the test itself is exercising symlink
+    // dereferencing so a copy-fallback would defeat its purpose.
+    await symlink(
+      linkedAssetPath,
+      path.join(localAssetsDir, "skill.md"),
+      process.platform === "win32" ? "file" : undefined,
+    );
 
     const client: SandboxManagedRuntimeClient = {
       makeDir: async (remotePath) => {

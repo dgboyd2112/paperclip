@@ -30,6 +30,7 @@ import {
   applyPaperclipWorkspaceEnv,
   buildPaperclipEnv,
   buildInvocationEnvForLogs,
+  createPlatformLink,
   ensureAbsoluteDirectory,
   ensurePaperclipSkillSymlink,
   joinPromptSections,
@@ -163,7 +164,10 @@ async function buildGeminiSkillsDir(
   const desiredNames = new Set(resolvePaperclipDesiredSkillNames(config, availableEntries));
   for (const entry of availableEntries) {
     if (!desiredNames.has(entry.key)) continue;
-    await fs.symlink(entry.source, path.join(target, entry.runtimeName));
+    await createPlatformLink(entry.source, path.join(target, entry.runtimeName), {
+      type: "dir",
+      copyFallback: true,
+    });
   }
   return target;
 }

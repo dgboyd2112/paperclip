@@ -227,7 +227,11 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await fs.symlink(
+      stalePackageDir,
+      path.join(serverNodeModulesScopeDir, "db"),
+      process.platform === "win32" ? "junction" : undefined,
+    );
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
     expect(await fs.realpath(path.join(serverNodeModulesScopeDir, "db"))).toBe(await fs.realpath(expectedPackageDir));
@@ -258,7 +262,11 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(expectedPackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await fs.symlink(
+      expectedPackageDir,
+      path.join(serverNodeModulesScopeDir, "db"),
+      process.platform === "win32" ? "junction" : undefined,
+    );
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
   });
@@ -296,7 +304,11 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await fs.symlink(
+      stalePackageDir,
+      path.join(serverNodeModulesScopeDir, "db"),
+      process.platform === "win32" ? "junction" : undefined,
+    );
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
     expect(await fs.realpath(path.join(serverNodeModulesScopeDir, "db"))).toBe(await fs.realpath(stalePackageDir));
@@ -827,7 +839,17 @@ describe("realizeExecutionWorkspace", () => {
     process.env.PAPERCLIP_WORKTREES_DIR = isolatedWorktreeHome;
     // Keep this server-side fixture on provision-worktree.sh's config writer path;
     // CLI/database seeding is covered by the CLI worktree tests.
-    await fs.symlink(process.execPath, path.join(isolatedBin, "node"));
+    // Windows file symlinks require Developer Mode — fall back to copying the
+    // node binary into the isolated bin so PATH-based lookup still works.
+    if (process.platform === "win32") {
+      try {
+        await fs.symlink(process.execPath, path.join(isolatedBin, "node.exe"), "file");
+      } catch {
+        await fs.copyFile(process.execPath, path.join(isolatedBin, "node.exe"));
+      }
+    } else {
+      await fs.symlink(process.execPath, path.join(isolatedBin, "node"));
+    }
     process.env.PATH = `${isolatedBin}${path.delimiter}/usr/bin${path.delimiter}/bin`;
 
     await fs.mkdir(sharedConfigDir, { recursive: true });

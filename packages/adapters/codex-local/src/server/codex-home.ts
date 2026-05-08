@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AdapterExecutionContext } from "@paperclipai/adapter-utils";
+import { createPlatformLink } from "@paperclipai/adapter-utils/server-utils";
 
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
 const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
@@ -42,26 +43,48 @@ async function ensureParentDir(target: string): Promise<void> {
   await fs.mkdir(path.dirname(target), { recursive: true });
 }
 
-async function ensureSymlink(target: string, source: string): Promise<void> {
+async function ensureSymlink(
+  target: string,
+  source: string,
+  onLog?: AdapterExecutionContext["onLog"],
+  fileLabel?: string,
+): Promise<void> {
+  const onFallback = async (): Promise<void> => {
+    if (!onLog) return;
+    await onLog(
+      "stderr",
+      `[paperclip] Copied "${fileLabel ?? source}" into managed Codex home (symlink unavailable — token refreshes will not propagate back to ${source}). Enable Windows Developer Mode to restore symlink behavior.\n`,
+    );
+  };
+
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
     await ensureParentDir(target);
-    await fs.symlink(source, target);
+    await createPlatformLink(source, target, { type: "file", copyFallback: true, onFallback });
     return;
   }
 
-  if (!existing.isSymbolicLink()) {
+  if (existing.isSymbolicLink()) {
+    const linkedPath = await fs.readlink(target).catch(() => null);
+    if (!linkedPath) return;
+
+    const resolvedLinkedPath = path.resolve(path.dirname(target), linkedPath);
+    if (resolvedLinkedPath === source) return;
+
+    await fs.unlink(target);
+    await createPlatformLink(source, target, { type: "file", copyFallback: true, onFallback });
     return;
   }
 
-  const linkedPath = await fs.readlink(target).catch(() => null);
-  if (!linkedPath) return;
-
-  const resolvedLinkedPath = path.resolve(path.dirname(target), linkedPath);
-  if (resolvedLinkedPath === source) return;
-
-  await fs.unlink(target);
-  await fs.symlink(source, target);
+  // Existing target is a real file (likely from a prior copy fallback). Refresh
+  // it from source so token updates flow forward at least, even if not back.
+  if (existing.isFile()) {
+    const sourceStat = await fs.stat(source).catch(() => null);
+    if (sourceStat && sourceStat.mtimeMs > existing.mtimeMs) {
+      await fs.unlink(target);
+      await createPlatformLink(source, target, { type: "file", copyFallback: true, onFallback });
+    }
+  }
 }
 
 async function ensureCopiedFile(target: string, source: string): Promise<void> {
@@ -86,7 +109,7 @@ export async function prepareManagedCodexHome(
   for (const name of SYMLINKED_SHARED_FILES) {
     const source = path.join(sourceHome, name);
     if (!(await pathExists(source))) continue;
-    await ensureSymlink(path.join(targetHome, name), source);
+    await ensureSymlink(path.join(targetHome, name), source, onLog, name);
   }
 
   for (const name of COPIED_SHARED_FILES) {

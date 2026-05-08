@@ -1361,15 +1361,110 @@ export function writePaperclipSkillSyncPreference(
   return next;
 }
 
+export type PlatformLinkType = "dir" | "file" | "auto";
+
+export interface PlatformLinkOptions {
+  /** "dir" | "file" | "auto" — default "auto" stats the source. */
+  type?: PlatformLinkType;
+  /** When the OS-level link fails with EPERM/EACCES/EXDEV, recursively copy. Default false. */
+  copyFallback?: boolean;
+  /** Invoked when a copy fallback fires; useful for emitting a stderr warning. */
+  onFallback?: (kind: "copy") => void | Promise<void>;
+}
+
+async function resolvePlatformLinkType(source: string, hint: PlatformLinkType): Promise<"dir" | "file"> {
+  if (hint !== "auto") return hint;
+  try {
+    const stat = await fs.stat(source);
+    return stat.isDirectory() ? "dir" : "file";
+  } catch {
+    return "file";
+  }
+}
+
+function isElevationOrCrossVolumeError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const code = (err as { code?: unknown }).code;
+  return code === "EPERM" || code === "EACCES" || code === "EXDEV" || code === "UV_EPERM";
+}
+
+/**
+ * Create a link from `source` to `target` that works on POSIX and Windows.
+ *
+ * On POSIX, this is a plain `fs.symlink(source, target)` (Node ignores the third
+ * argument on POSIX). On Windows, directory targets become NTFS junctions (which
+ * do NOT require elevation, unlike symlinks), and file targets use file-type
+ * symlinks (which DO require elevation/Developer Mode). When the OS-level link
+ * fails on Windows and `copyFallback` is set, the source is recursively copied
+ * to the target and `onFallback("copy")` is invoked.
+ */
+export async function createPlatformLink(
+  source: string,
+  target: string,
+  options: PlatformLinkOptions = {},
+): Promise<"symlink" | "junction" | "copy"> {
+  const { type = "auto", copyFallback = false, onFallback } = options;
+
+  if (process.platform !== "win32") {
+    await fs.symlink(source, target);
+    return "symlink";
+  }
+
+  const resolved = await resolvePlatformLinkType(source, type);
+
+  try {
+    if (resolved === "dir") {
+      await fs.symlink(source, target, "junction");
+      return "junction";
+    }
+    await fs.symlink(source, target, "file");
+    return "symlink";
+  } catch (err) {
+    if (!copyFallback || !isElevationOrCrossVolumeError(err)) {
+      throw err;
+    }
+  }
+
+  if (resolved === "dir") {
+    await fs.cp(source, target, { recursive: true, dereference: false });
+  } else {
+    await fs.copyFile(source, target);
+  }
+  if (onFallback) await onFallback("copy");
+  return "copy";
+}
+
+/** Normalize a Windows junction's readlink output (which may have a `\\?\` prefix). */
+function normalizeLinkedPath(value: string): string {
+  let v = value;
+  if (process.platform === "win32" && v.startsWith("\\\\?\\")) {
+    v = v.slice(4);
+  }
+  return path.normalize(v);
+}
+
+function pathsEqualForPlatform(a: string, b: string): boolean {
+  const na = normalizeLinkedPath(a);
+  const nb = normalizeLinkedPath(b);
+  if (process.platform === "win32") {
+    return na.toLowerCase() === nb.toLowerCase();
+  }
+  return na === nb;
+}
+
+const defaultSkillLink = async (source: string, target: string): Promise<void> => {
+  await createPlatformLink(source, target, { type: "dir", copyFallback: true });
+};
+
 export async function ensurePaperclipSkillSymlink(
   source: string,
   target: string,
-  linkSkill: (source: string, target: string) => Promise<void> = (linkSource, linkTarget) =>
-    fs.symlink(linkSource, linkTarget),
+  linkSkill?: (source: string, target: string) => Promise<void>,
 ): Promise<"created" | "repaired" | "skipped"> {
+  const link = linkSkill ?? defaultSkillLink;
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {
-    await linkSkill(source, target);
+    await link(source, target);
     return "created";
   }
 
@@ -1380,8 +1475,10 @@ export async function ensurePaperclipSkillSymlink(
   const linkedPath = await fs.readlink(target).catch(() => null);
   if (!linkedPath) return "skipped";
 
-  const resolvedLinkedPath = path.resolve(path.dirname(target), linkedPath);
-  if (resolvedLinkedPath === source) {
+  const resolvedLinkedPath = path.isAbsolute(linkedPath)
+    ? linkedPath
+    : path.resolve(path.dirname(target), linkedPath);
+  if (pathsEqualForPlatform(resolvedLinkedPath, source)) {
     return "skipped";
   }
 
@@ -1391,7 +1488,7 @@ export async function ensurePaperclipSkillSymlink(
   }
 
   await fs.unlink(target);
-  await linkSkill(source, target);
+  await link(source, target);
   return "repaired";
 }
 
