@@ -289,12 +289,70 @@ export async function touchLocalServiceRegistryRecord(
   return next;
 }
 
+async function snapshotWindowsProcessParents(): Promise<Map<number, number>> {
+  // pid -> parent pid for every process on the machine.
+  const parents = new Map<number, number>();
+  try {
+    const { stdout } = await execFileAsync("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }",
+    ]);
+    for (const line of stdout.split(/\r?\n/)) {
+      const [pidText, ppidText] = line.trim().split(/\s+/);
+      const pid = Number.parseInt(pidText, 10);
+      const ppid = Number.parseInt(ppidText, 10);
+      if (Number.isInteger(pid) && Number.isInteger(ppid)) parents.set(pid, ppid);
+    }
+  } catch {
+    // Best effort: an empty map degrades to killing only the known pids.
+  }
+  return parents;
+}
+
+async function killWindowsProcessTree(rootPid: number) {
+  // On Windows, Node's process.kill TerminateProcess-es the single pid for any
+  // signal except 0 — it cannot deliver a catchable signal, so the runner's own
+  // shutdown handler never runs and its descendants (notably the embedded
+  // Postgres cluster) are orphaned. `taskkill /T` alone still races: the
+  // Postgres postmaster forks workers rapidly, so a worker spawned between the
+  // tree snapshot and the kill escapes and keeps holding its port. We instead
+  // accumulate a kill set across passes — each pass also reaps any live process
+  // still parented to a pid we already killed, which catches those escapees
+  // (their now-dead parent stays referenced in the process table).
+  const killed = new Set<number>([rootPid]);
+  for (let pass = 0; pass < 5; pass += 1) {
+    const parents = await snapshotWindowsProcessParents();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [pid, ppid] of parents) {
+        if (!killed.has(pid) && killed.has(ppid)) {
+          killed.add(pid);
+          grew = true;
+        }
+      }
+    }
+    await Promise.all(
+      [...killed].map((pid) => execFileAsync("taskkill", ["/pid", String(pid), "/f"]).catch(() => {})),
+    );
+    await delay(200);
+    if (![...killed].some((pid) => isPidAlive(pid))) return;
+  }
+}
+
 export async function terminateLocalService(
   record: Pick<LocalServiceRegistryRecord, "pid" | "processGroupId">,
   opts?: { signal?: NodeJS.Signals; forceAfterMs?: number },
 ) {
   const signal = opts?.signal ?? "SIGTERM";
-  const targetProcessGroup = process.platform !== "win32" && record.processGroupId && record.processGroupId > 0;
+  if (process.platform === "win32") {
+    if (!isPidAlive(record.pid)) return;
+    await killWindowsProcessTree(record.pid);
+    return;
+  }
+  const targetProcessGroup = record.processGroupId != null && record.processGroupId > 0;
   try {
     if (targetProcessGroup) {
       process.kill(-record.processGroupId!, signal);
