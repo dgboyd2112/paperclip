@@ -106,6 +106,7 @@ const emptyOverlay: AgentConfigOverlay = {
   adapterConfig: {},
   heartbeat: {},
   runtime: {},
+  metadata: {},
 };
 
 /** Stable empty object used as fallback for missing env config to avoid new-object-per-render. */
@@ -117,7 +118,8 @@ function isOverlayDirty(o: AgentConfigOverlay): boolean {
     o.adapterType !== undefined ||
     Object.keys(o.adapterConfig).length > 0 ||
     Object.keys(o.heartbeat).length > 0 ||
-    Object.keys(o.runtime).length > 0
+    Object.keys(o.runtime).length > 0 ||
+    Object.keys(o.metadata).length > 0
   );
 }
 
@@ -607,6 +609,57 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 }}
               />
             </Field>
+            {/* Has Email toggle — gates the Gmail intake sidecar for this agent */}
+            {(() => {
+              const existingMetadata = (props.agent.metadata ?? {}) as Record<string, unknown>;
+              const emailEnabled = eff("metadata", "emailEnabled", existingMetadata.emailEnabled === true);
+              const emailValue = eff("metadata", "email", typeof existingMetadata.email === "string" ? existingMetadata.email : "");
+              const trimmedEmail = typeof emailValue === "string" ? emailValue.trim() : "";
+              const emailFormatValid = trimmedEmail === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail);
+              const duplicateAgent = trimmedEmail
+                ? companyAgents.find((a) => {
+                    if (a.id === props.agent.id) return false;
+                    const md = (a.metadata ?? {}) as Record<string, unknown>;
+                    const other = typeof md.email === "string" ? md.email.trim().toLowerCase() : "";
+                    return other && other === trimmedEmail.toLowerCase();
+                  })
+                : undefined;
+              return (
+                <>
+                  <ToggleField
+                    label="Has Email"
+                    hint={help.hasEmail}
+                    checked={emailEnabled === true}
+                    onChange={(v) => mark("metadata", "emailEnabled", v)}
+                    toggleTestId="has-email-toggle"
+                  />
+                  {emailEnabled === true && (
+                    <Field label="Email" hint={help.email}>
+                      <DraftInput
+                        value={typeof emailValue === "string" ? emailValue : ""}
+                        onCommit={(v) => mark("metadata", "email", v)}
+                        immediate
+                        className={inputClass}
+                        placeholder="agent-name@your-domain.com"
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Make sure this alias exists in Google Workspace before enabling. The UI cannot create it for you.
+                      </p>
+                      {!emailFormatValid && (
+                        <p className="mt-1 text-[11px] text-destructive">
+                          Doesn't look like a valid email address.
+                        </p>
+                      )}
+                      {duplicateAgent && (
+                        <p className="mt-1 text-[11px] text-destructive">
+                          Another agent ({duplicateAgent.name}) in this company already uses this address — routing will be ambiguous.
+                        </p>
+                      )}
+                    </Field>
+                  )}
+                </>
+              );
+            })()}
             {isLocal && !props.hidePromptTemplate && (
               <>
                 <Field label="Prompt Template" hint={help.promptTemplate}>

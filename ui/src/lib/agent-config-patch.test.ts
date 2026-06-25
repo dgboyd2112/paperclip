@@ -53,6 +53,7 @@ function makeOverlay(patch?: Partial<AgentConfigOverlay>): AgentConfigOverlay {
     adapterConfig: {},
     heartbeat: {},
     runtime: {},
+    metadata: {},
     ...patch,
   };
 }

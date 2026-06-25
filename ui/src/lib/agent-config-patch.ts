@@ -6,6 +6,7 @@ export interface AgentConfigOverlay {
   adapterConfig: Record<string, unknown>;
   heartbeat: Record<string, unknown>;
   runtime: Record<string, unknown>;
+  metadata: Record<string, unknown>;
 }
 
 const ADAPTER_AGNOSTIC_KEYS = [
@@ -64,6 +65,11 @@ export function buildAgentUpdatePatch(agent: Agent, overlay: AgentConfigOverlay)
 
   if (Object.keys(overlay.runtime).length > 0) {
     Object.assign(patch, overlay.runtime);
+  }
+
+  if (Object.keys(overlay.metadata).length > 0) {
+    const existingMetadata = (agent.metadata ?? {}) as Record<string, unknown>;
+    patch.metadata = { ...existingMetadata, ...overlay.metadata };
   }
 
   return patch;

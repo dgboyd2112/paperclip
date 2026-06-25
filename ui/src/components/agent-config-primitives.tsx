@@ -22,6 +22,8 @@ import { AGENT_ROLE_LABELS } from "@paperclipai/shared";
 export const help: Record<string, string> = {
   name: "Display name for this agent.",
   title: "Job title shown in the org chart.",
+  hasEmail: "Toggle on to give this agent its own email address. The Gmail intake sidecar will wake this agent when mail arrives at that address.",
+  email: "Email address the agent receives mail at. Must already exist as an alias in Google Workspace — the UI cannot create it for you.",
   role: "Organizational role. Determines position and capabilities.",
   reportsTo: "The agent this one reports to in the org hierarchy.",
   capabilities: "Describes what this agent can do. Shown in the org chart and used for task routing.",
