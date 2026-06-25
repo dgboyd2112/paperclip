@@ -11,7 +11,12 @@ const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
 
 function createUtilitySql(url: string) {
-  return postgres(url, { max: 1, onnotice: () => {} });
+  // `connect_timeout` is essential: without it, connecting to a postmaster that
+  // is alive but wedged (accepts the TCP socket but never completes the startup
+  // handshake) blocks forever. A bounded timeout turns that into a fast, handled
+  // error so callers can recover instead of hanging. It only bounds connection
+  // establishment, not query duration, so long-running migrations are unaffected.
+  return postgres(url, { max: 1, connect_timeout: 10, onnotice: () => {} });
 }
 
 function isSafeIdentifier(value: string): boolean {
