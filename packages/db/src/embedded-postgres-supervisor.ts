@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
+import { promisify } from "node:util";
 import postgres from "postgres";
 import { getPostgresDataDirectory } from "./client.js";
 
@@ -126,12 +127,71 @@ export async function probePostgresAcceptsConnections(
   return false;
 }
 
-/** Best-effort termination of a postmaster and all of its child backends. */
+const execFileAsync = promisify(execFile);
+
+async function snapshotWindowsProcessParents(): Promise<Map<number, number>> {
+  // pid -> parent pid for every process on the machine.
+  const parents = new Map<number, number>();
+  try {
+    const { stdout } = await execFileAsync("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }",
+    ]);
+    for (const line of stdout.split(/\r?\n/)) {
+      const [pidText, ppidText] = line.trim().split(/\s+/);
+      const parsedPid = Number.parseInt(pidText, 10);
+      const parsedPpid = Number.parseInt(ppidText, 10);
+      if (Number.isInteger(parsedPid) && Number.isInteger(parsedPpid)) {
+        parents.set(parsedPid, parsedPpid);
+      }
+    }
+  } catch {
+    // Best effort: an empty map degrades to killing only the known pids.
+  }
+  return parents;
+}
+
+/**
+ * Best-effort termination of a postmaster and all of its child backends.
+ *
+ * On Windows, `taskkill /T` alone races the postmaster's rapid worker forking:
+ * a worker spawned between the tree snapshot and the kill escapes, keeps the
+ * cluster's shared memory mapped (failing the next start on this data dir with
+ * "pre-existing shared memory block is still in use"), and holds the
+ * postmaster's shared stderr pipe open. So, like the dev:stop teardown in
+ * local-service-supervisor, accumulate a kill set across passes — each pass
+ * reaps any live process still parented to a pid already in the set (a dead
+ * parent stays referenced in the process table). This also works when `pid` is
+ * already dead: its orphaned workers are still parented to it, so they land in
+ * the kill set on the first pass.
+ */
 export async function terminatePostmasterTree(pid: number): Promise<void> {
   if (process.platform === "win32") {
-    await new Promise<void>((resolve) => {
-      execFile("taskkill", ["/F", "/T", "/PID", String(pid)], () => resolve());
-    });
+    const killed = new Set<number>([pid]);
+    for (let pass = 0; pass < 5; pass += 1) {
+      const parents = await snapshotWindowsProcessParents();
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const [childPid, parentPid] of parents) {
+          if (!killed.has(childPid) && killed.has(parentPid)) {
+            killed.add(childPid);
+            grew = true;
+          }
+        }
+      }
+      await Promise.all(
+        [...killed].map((target) =>
+          new Promise<void>((resolve) => {
+            execFile("taskkill", ["/F", "/PID", String(target)], () => resolve());
+          }),
+        ),
+      );
+      await delay(200);
+      if (![...killed].some((target) => isPidAlive(target))) return;
+    }
     return;
   }
   try {
@@ -144,6 +204,58 @@ export async function terminatePostmasterTree(pid: number): Promise<void> {
     process.kill(pid, "SIGKILL");
   } catch {
     // already gone
+  }
+}
+
+async function resolvesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    // A live timer would keep short-lived callers (the dev migration runner)
+    // alive for the full timeout after a successful stop.
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const embeddedPostgresStopTimeoutMs = 15_000;
+
+/**
+ * Stop an embedded-postgres instance and leave the cluster fully gone.
+ *
+ * The library's stop() force-kills the postmaster on Windows, which (1) can
+ * leave a worker forked mid-kill running — it keeps the cluster's shared
+ * memory mapped and pins the calling process's event loop via the shared
+ * stderr pipe — and (2) always leaves postmaster.pid behind, because
+ * TerminateProcess denies Postgres its own shutdown cleanup. Reap stragglers
+ * rooted at the postmaster's pid and clear the pid file it could not remove.
+ * The stop is also time-bounded so no caller (the dev runner's migration
+ * preflight, the server's shutdown path) can hang on it.
+ */
+export async function stopEmbeddedPostmaster(
+  instance: { stop(): Promise<void> },
+  dataDir: string,
+): Promise<void> {
+  const pidInfo = readPostmasterPidFile(dataDir);
+  let stopReturned = false;
+  try {
+    stopReturned = await resolvesWithin(instance.stop(), embeddedPostgresStopTimeoutMs);
+  } finally {
+    if (pidInfo && (!stopReturned || process.platform === "win32")) {
+      await terminatePostmasterTree(pidInfo.pid);
+    }
+    // Remove the pid file only if it still names the postmaster we stopped —
+    // a different pid means another supervisor already started a new cluster.
+    const remaining = readPostmasterPidFile(dataDir);
+    if (pidInfo && remaining && remaining.pid === pidInfo.pid) {
+      removePostmasterPidFile(dataDir);
+    }
   }
 }
 
@@ -183,6 +295,13 @@ export async function ensureEmbeddedPostmasterPlan(opts: {
     await waitForPortToFree(port, 6000);
   } else if (pidInfo) {
     log("warn", `Removing stale embedded PostgreSQL lock file (dead pid=${pidInfo.pid}).`);
+    if (process.platform === "win32") {
+      // Workers orphaned by the dead postmaster keep the cluster's shared
+      // memory mapped, which would fail the start below; reap them via their
+      // dead parent before starting fresh. (POSIX workers exit on their own
+      // when they see the postmaster-death pipe close.)
+      await terminatePostmasterTree(pidInfo.pid);
+    }
     removePostmasterPidFile(dataDir);
   }
 

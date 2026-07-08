@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { applyPendingMigrations, ensurePostgresDatabase } from "./client.js";
+import { stopEmbeddedPostmaster } from "./embedded-postgres-supervisor.js";
 
 type EmbeddedPostgresInstance = {
   initialise(): Promise<void>;
@@ -125,7 +126,7 @@ async function probeEmbeddedPostgresSupport(): Promise<EmbeddedPostgresTestSuppo
       reason: formatEmbeddedPostgresError(error),
     };
   } finally {
-    await instance.stop().catch(() => {});
+    await stopEmbeddedPostmaster(instance, dataDir).catch(() => {});
     cleanupEmbeddedPostgresTestDirs(dataDir);
   }
 }
@@ -154,12 +155,12 @@ export async function startEmbeddedPostgresTestDatabase(
     return {
       connectionString,
       cleanup: async () => {
-        await instance.stop().catch(() => {});
+        await stopEmbeddedPostmaster(instance, dataDir).catch(() => {});
         cleanupEmbeddedPostgresTestDirs(dataDir);
       },
     };
   } catch (error) {
-    await instance.stop().catch(() => {});
+    await stopEmbeddedPostmaster(instance, dataDir).catch(() => {});
     cleanupEmbeddedPostgresTestDirs(dataDir);
     throw new Error(
       `Failed to start embedded PostgreSQL test database: ${formatEmbeddedPostgresError(error)}`,

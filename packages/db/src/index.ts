@@ -33,6 +33,7 @@ export {
 export {
   ensureEmbeddedPostmasterPlan,
   probePostgresAcceptsConnections,
+  stopEmbeddedPostmaster,
   terminatePostmasterTree,
   readPostmasterPidFile,
   removePostmasterPidFile,

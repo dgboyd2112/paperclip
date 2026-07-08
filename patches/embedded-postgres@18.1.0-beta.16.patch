@@ -1,7 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
+index ccfe17a82f4879bf20cc345c579a987d9eba5309..937a4e54974a92c0dcd719da81a588a4c2419c7e 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -23,7 +23,7 @@
+@@ -23,7 +23,7 @@ const { Client } = pg;
   * for a particular string, we need to force that string into the right locale.
   * @see https://github.com/leinelissen/embedded-postgres/issues/15
   */
@@ -10,7 +11,7 @@ diff --git a/dist/index.js b/dist/index.js
  // The default configuration options for the class
  const defaults = {
      databaseDir: path.join(process.cwd(), 'data', 'db'),
-@@ -133,7 +133,7 @@
+@@ -133,7 +133,7 @@ class EmbeddedPostgres {
                      `--pwfile=${passwordFile}`,
                      `--lc-messages=${LC_MESSAGES_LOCALE}`,
                      ...this.options.initdbFlags,
@@ -19,7 +20,7 @@ diff --git a/dist/index.js b/dist/index.js
                  // Connect to stderr, as that is where the messages get sent
                  (_a = process.stdout) === null || _a === void 0 ? void 0 : _a.on('data', (chunk) => {
                      // Parse the data as a string and log it
-@@ -177,7 +177,7 @@
+@@ -177,7 +177,7 @@ class EmbeddedPostgres {
                      '-p',
                      this.options.port.toString(),
                      ...this.options.postgresFlags,
@@ -28,3 +29,61 @@ diff --git a/dist/index.js b/dist/index.js
                  // Connect to stderr, as that is where the messages get sent
                  (_a = this.process.stderr) === null || _a === void 0 ? void 0 : _a.on('data', (chunk) => {
                      // Parse the data as a string and log it
+@@ -207,25 +207,39 @@ class EmbeddedPostgres {
+             if (!this.process) {
+                 return;
+             }
+-            // Kill the existing postgres process
+-            yield new Promise((resolve) => {
+-                var _a, _b, _c;
+-                // Register a handler for when the process finally exists
+-                (_a = this.process) === null || _a === void 0 ? void 0 : _a.on('exit', resolve);
+-                // GUARD: Check if we're on Windows, since Windows doesn't support SIGINT
+-                if (platform() === 'win32') {
+-                    // GUARD: Double check the pid is there to keep TypeScript happy
+-                    if (!((_b = this.process) === null || _b === void 0 ? void 0 : _b.pid)) {
+-                        throw new Error('Could not find process PID');
++            const proc = this.process;
++            // GUARD: Only kill and await the postmaster if it has not already
++            // exited. A postmaster that crashed or was killed externally emitted
++            // 'exit' long ago, so registering the listener now would wait for an
++            // event that never fires again and hang this promise forever.
++            if (proc.exitCode === null && proc.signalCode === null) {
++                // Kill the existing postgres process
++                yield new Promise((resolve) => {
++                    // Register a handler for when the process finally exists
++                    proc.on('exit', resolve);
++                    // GUARD: Check if we're on Windows, since Windows doesn't support SIGINT
++                    if (platform() === 'win32') {
++                        // GUARD: Double check the pid is there to keep TypeScript happy
++                        if (!proc.pid) {
++                            throw new Error('Could not find process PID');
++                        }
++                        // Actually kill the process using the Windows taskkill command
++                        spawn('taskkill', ['/pid', proc.pid.toString(), '/f', '/t']);
+                     }
+-                    // Actually kill the process using the Windows taskkill command
+-                    spawn('taskkill', ['/pid', this.process.pid.toString(), '/f', '/t']);
+-                }
+-                else {
+-                    // If on a sane OS, simply kill using SIGINT
+-                    (_c = this.process) === null || _c === void 0 ? void 0 : _c.kill('SIGINT');
+-                }
+-            });
++                    else {
++                        // If on a sane OS, simply kill using SIGINT
++                        proc.kill('SIGINT');
++                    }
++                });
++            }
++            // Destroy the postmaster's stdio pipes. PostgreSQL shares the
++            // postmaster's stderr with every backend, so a backend that survives
++            // the kill (e.g. a worker forked mid-taskkill on Windows) holds the
++            // write end open; an open pipe with active listeners pins this Node
++            // process's event loop and prevents it from ever exiting.
++            for (const stream of proc.stdio ?? []) {
++                stream === null || stream === void 0 ? void 0 : stream.destroy();
++            }
+             // Clean up process
+             this.process = undefined;
+             // GUARD: Additional work if database is not persistent

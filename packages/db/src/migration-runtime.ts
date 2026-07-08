@@ -2,7 +2,7 @@ import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { ensurePostgresDatabase } from "./client.js";
 import { createEmbeddedPostgresLogBuffer, formatEmbeddedPostgresError } from "./embedded-postgres-error.js";
-import { ensureEmbeddedPostmasterPlan } from "./embedded-postgres-supervisor.js";
+import { ensureEmbeddedPostmasterPlan, stopEmbeddedPostmaster } from "./embedded-postgres-supervisor.js";
 import { resolveDatabaseTarget } from "./runtime-config.js";
 
 type EmbeddedPostgresInstance = {
@@ -112,7 +112,7 @@ async function ensureEmbeddedPostgresConnection(
     connectionString: `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`,
     source: `embedded-postgres@${port}`,
     stop: async () => {
-      await instance.stop();
+      await stopEmbeddedPostmaster(instance, dataDir);
     },
   };
 }

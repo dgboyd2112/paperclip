@@ -11,6 +11,7 @@ import {
   createDb,
   ensurePostgresDatabase,
   ensureEmbeddedPostmasterPlan,
+  stopEmbeddedPostmaster,
   formatEmbeddedPostgresError,
   inspectMigrations,
   applyPendingMigrations,
@@ -852,7 +853,7 @@ export async function startServer(): Promise<StartedServer> {
       if (embeddedPostgres && embeddedPostgresStartedByThisProcess) {
         logger.info({ signal }, "Stopping embedded PostgreSQL");
         try {
-          await embeddedPostgres?.stop();
+          await stopEmbeddedPostmaster(embeddedPostgres, resolve(config.embeddedPostgresDataDir));
         } catch (err) {
           logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
         }
