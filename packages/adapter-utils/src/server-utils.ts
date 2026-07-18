@@ -54,7 +54,8 @@ function resolveProcessGroupId(child: ChildProcess) {
   return typeof child.pid === "number" && child.pid > 0 ? child.pid : null;
 }
 
-function signalRunningProcess(
+// Exported so the direct-child fallback branch can be unit-tested directly.
+export function signalRunningProcess(
   running: Pick<RunningProcess, "child" | "processGroupId">,
   signal: NodeJS.Signals,
 ) {
@@ -66,7 +67,13 @@ function signalRunningProcess(
       // Fall back to the direct child signal if group signaling fails.
     }
   }
-  if (!running.child.killed) {
+  // Gate on real liveness: `child.killed` only means a signal was sent, not that
+  // the process exited (per the Node docs), so escalating on it would suppress a
+  // follow-up SIGKILL — a child that ignores SIGTERM would then outlive its
+  // deadline forever on the win32 / no-process-group fallback path. exitCode and
+  // signalCode stay null until the child actually closes.
+  // Ref upstream paperclipai/paperclip#8598.
+  if (running.child.exitCode === null && running.child.signalCode === null) {
     running.child.kill(signal);
   }
 }
