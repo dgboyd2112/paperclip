@@ -3,6 +3,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { redactSensitiveText } from "../redaction.js";
 
 export type RunLogStoreType = "local_file";
 
@@ -109,10 +110,15 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
     async append(handle, event) {
       if (handle.store !== "local_file") return 0;
       const absPath = resolveWithin(basePath, handle.logRef);
+      // Redact secrets (API keys, Bearer tokens, JWTs, KEY=val env assignments)
+      // from the raw agent output before it is persisted. Otherwise live tokens
+      // land in plaintext in the run-log .ndjson files — which accumulate
+      // indefinitely and are swept into every DB backup
+      // (upstream paperclipai/paperclip#8047).
       const line = JSON.stringify({
         ts: event.ts,
         stream: event.stream,
-        chunk: event.chunk,
+        chunk: redactSensitiveText(event.chunk),
       });
       const persisted = `${line}\n`;
       await fs.appendFile(absPath, persisted, "utf8");
