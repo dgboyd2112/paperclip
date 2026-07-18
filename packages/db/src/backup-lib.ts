@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
@@ -496,7 +496,27 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
   };
   mkdirSync(opts.backupDir, { recursive: true });
   const sqlFile = resolve(opts.backupDir, `${filenamePrefix}-${timestamp()}.sql`);
-  const backupFile = `${sqlFile}.gz`;
+  const finalBackupFile = `${sqlFile}.gz`;
+  // Both engines compress into this temp path; we atomically rename to the
+  // published .gz only after a complete, non-empty write. A crash / ENOSPC
+  // mid-backup then leaves a *.partial temp (cleaned up on error) instead of a
+  // truncated file that masquerades as a valid published backup
+  // (upstream paperclipai/paperclip#9756).
+  const backupFile = `${finalBackupFile}.partial`;
+  // A real dump (schema DDL alone) is always kilobytes; a bare/torn gzip is ~20
+  // bytes. Anything this small is corrupt — fail loudly rather than publish it.
+  const MIN_VALID_BACKUP_BYTES = 100;
+  const finalizeBackupFile = (): number => {
+    const compressedSize = statSync(backupFile).size;
+    if (compressedSize < MIN_VALID_BACKUP_BYTES) {
+      try { unlinkSync(backupFile); } catch { /* ignore */ }
+      throw new Error(
+        `Refusing to publish an empty/truncated backup (${compressedSize} bytes): ${basename(finalBackupFile)}`,
+      );
+    }
+    renameSync(backupFile, finalBackupFile);
+    return statSync(finalBackupFile).size;
+  };
   const writer = createBufferedTextFileWriter(sqlFile);
 
   try {
@@ -510,10 +530,10 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
           connectTimeout,
         });
         await writer.abort();
-        const sizeBytes = statSync(backupFile).size;
+        const sizeBytes = finalizeBackupFile();
         const prunedCount = pruneOldBackups(opts.backupDir, retention, filenamePrefix);
         return {
-          backupFile,
+          backupFile: finalBackupFile,
           sizeBytes,
           prunedCount,
         };
@@ -920,17 +940,18 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
 
     await writer.close();
 
-    // Compress the SQL file with gzip
+    // Compress the SQL file with gzip into the temp path, then atomically
+    // publish it via finalizeBackupFile (rename after a complete, non-empty write).
     const sqlReadStream = createReadStream(sqlFile);
     const gzWriteStream = createWriteStream(backupFile);
     await pipeline(sqlReadStream, createGzip(), gzWriteStream);
+    const sizeBytes = finalizeBackupFile();
     unlinkSync(sqlFile);
 
-    const sizeBytes = statSync(backupFile).size;
     const prunedCount = pruneOldBackups(opts.backupDir, retention, filenamePrefix);
 
     return {
-      backupFile,
+      backupFile: finalBackupFile,
       sizeBytes,
       prunedCount,
     };
