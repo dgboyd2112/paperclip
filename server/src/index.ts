@@ -507,6 +507,13 @@ export async function startServer(): Promise<StartedServer> {
     shareClient: createFeedbackTraceShareClientFromConfig(config),
   });
   const backupSettingsSvc = instanceSettingsService(db);
+  // A hung backup (e.g. a wedged pg_dump/gzip on Windows) must not permanently
+  // wedge the in-flight flag — otherwise every subsequent scheduled backup is
+  // silently skipped until the server is restarted, disabling the whole backup
+  // safety net with no error (upstream paperclipai/paperclip#9289). Bound each
+  // run so a hang eventually rejects, freeing the flag via the finally below.
+  // Normal backups take a few seconds; 10 min is a very generous ceiling.
+  const DATABASE_BACKUP_TIMEOUT_MS = 10 * 60 * 1000;
   let databaseBackupInFlight = false;
   const runServerDatabaseBackup = async (
     trigger: InstanceDatabaseBackupTrigger,
@@ -530,11 +537,26 @@ export async function startServer(): Promise<StartedServer> {
       const generalSettings = await backupSettingsSvc.getGeneral();
       const retention = generalSettings.backupRetention;
 
-      const result = await runDatabaseBackup({
-        connectionString: activeDatabaseConnectionString,
-        backupDir: config.databaseBackupDir,
-        retention,
-        filenamePrefix: "paperclip",
+      let backupTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const result = await Promise.race([
+        runDatabaseBackup({
+          connectionString: activeDatabaseConnectionString,
+          backupDir: config.databaseBackupDir,
+          retention,
+          filenamePrefix: "paperclip",
+        }),
+        new Promise<never>((_, reject) => {
+          backupTimeoutHandle = setTimeout(() => {
+            reject(
+              new Error(
+                `Database backup timed out after ${DATABASE_BACKUP_TIMEOUT_MS}ms`,
+              ),
+            );
+          }, DATABASE_BACKUP_TIMEOUT_MS);
+          backupTimeoutHandle.unref?.();
+        }),
+      ]).finally(() => {
+        if (backupTimeoutHandle) clearTimeout(backupTimeoutHandle);
       });
       const finishedAt = new Date();
       const response: InstanceDatabaseBackupRunResult = {
