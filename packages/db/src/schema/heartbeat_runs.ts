@@ -16,7 +16,9 @@ export const heartbeatRuns = pgTable(
     finishedAt: timestamp("finished_at", { withTimezone: true }),
     error: text("error"),
     wakeupRequestId: uuid("wakeup_request_id").references(() => agentWakeupRequests.id),
-    exitCode: integer("exit_code"),
+    // bigint, not int4: Windows STATUS_ACCESS_VIOLATION exits as 3221225477
+    // (0xC0000005), which overflows int4 (max 2147483647). See paperclipai/paperclip#7618.
+    exitCode: bigint("exit_code", { mode: "number" }),
     signal: text("signal"),
     usageJson: jsonb("usage_json").$type<Record<string, unknown>>(),
     resultJson: jsonb("result_json").$type<Record<string, unknown>>(),
