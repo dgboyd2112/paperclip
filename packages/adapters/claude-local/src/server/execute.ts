@@ -770,7 +770,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       : null;
     const clearSessionForMaxTurns = isClaudeMaxTurnsResult(parsed);
     const parsedIsError = asBoolean(parsed.is_error, false);
-    const failed = (proc.exitCode ?? 0) !== 0 || parsedIsError;
+    // Windows STATUS_ACCESS_VIOLATION (0xC0000005 = 3221225477) can be raised
+    // during Claude's native process teardown *after* it already emitted a
+    // complete result JSON — a finished run, not a failed one. Treat that
+    // specific case as success so a good run isn't spuriously marked failed
+    // (upstream paperclipai/paperclip#7618).
+    const isTeardownCrash =
+      proc.exitCode === 3221225477 && !parsedIsError && parsedStream.resultJson !== null;
+    const failed = isTeardownCrash
+      ? false
+      : (proc.exitCode ?? 0) !== 0 || parsedIsError;
     const errorMessage = failed
       ? describeClaudeFailure(parsed) ?? `Claude exited with code ${proc.exitCode ?? -1}`
       : null;
@@ -804,7 +813,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
 
     return {
-      exitCode: proc.exitCode,
+      // Report a teardown-only crash as a clean exit; also avoids persisting the
+      // out-of-int4-range 3221225477 into heartbeat_runs.exit_code.
+      exitCode: isTeardownCrash ? 0 : proc.exitCode,
       signal: proc.signal,
       timedOut: false,
       errorMessage,
